@@ -6,3 +6,5 @@ librosa==0.6.0
 scipy==1.0.0
 Unidecode==1.0.22
 pillow
+sinlib
+torchaudio

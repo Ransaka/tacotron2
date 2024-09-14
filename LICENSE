@@ -1,6 +1,9 @@
-BSD 3-Clause License
+# Modified BSD 3-Clause License
+
+This software is based on work by NVIDIA Corporation, modified by Ransaka Ravihara.
 
 Copyright (c) 2018, NVIDIA Corporation
+Copyright (c) 2024, Ransaka Ravihara
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -27,3 +30,13 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Modifications
+The following modifications have been made to the original NVIDIA code:
+
+1. Preprocessing methods have been altered to better suit the target application.
+2. The inference strategy has been updated.
+3. Minor changes have been implemented in the training loop.
+4. A major modification includes the implementation of a fresh tokenization strategy specialized for the Sinhala language.
+
+While these changes have been made, the core model architecture remains largely unchanged from the original NVIDIA implementation.
