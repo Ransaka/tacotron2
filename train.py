@@ -88,8 +88,8 @@ def prepare_dataloaders(hparams):
     _train_and_val_files = pd.concat([pd.read_csv(fp) for fp in [train_metadata_file, val_metadata_file]])
     _text_lines = _train_and_val_files[hparams.text_column_name].values.tolist()
     _tokenizer = SinhalaTokenizerTacotron(text_list=_text_lines)
-    trainset = TextMelLoader(hparams.training_files, _tokenizer.vocab_map ,hparams)
-    valset = TextMelLoader(hparams.validation_files, _tokenizer.vocab_map,  hparams)
+    trainset = TextMelLoader(train_metadata_file, _tokenizer.vocab_map ,hparams)
+    valset = TextMelLoader(val_metadata_file, _tokenizer.vocab_map,  hparams)
     collate_fn = TextMelCollate(hparams.n_frames_per_step)
 
     if hparams.distributed_run:
