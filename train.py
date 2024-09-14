@@ -55,29 +55,29 @@ def init_distributed(hparams, n_gpus, rank, group_name):
     print("Done initializing distributed")
 
 
-def inference_utterance(model,device: str = 'cuda') -> Tuple[torch.Tensor, plt.Figure]:
-    model.eval()
-    model.to(device)
+# def inference_utterance(model,device: str = 'cuda') -> Tuple[torch.Tensor, plt.Figure]:
+#     model.eval()
+#     model.to(device)
     
-    # Convert text to sequence
-    sequence = torch.tensor([[10,20,304,40,20,20,20, 39 , 20]])
+#     # Convert text to sequence
+#     sequence = torch.tensor([[10,20,304,40,20,20,20, 39 , 20]])
     
-    with torch.no_grad():
-        outputs = model.inference(sequence)
+#     with torch.no_grad():
+#         outputs = model.inference(sequence)
     
-    mel_outputs, mel_outputs_postnet, gate_outputs, alignments = outputs
+#     mel_outputs, mel_outputs_postnet, gate_outputs, alignments = outputs
     
-    # Create visualization
-    fig, ax = plt.subplots(figsize=(12, 6))
-    im = ax.imshow(mel_outputs_postnet[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
-    ax.set_title(f'Mel Spectrogram')
-    ax.set_xlabel('Time')
-    ax.set_ylabel('Mel Frequency')
-    fig.colorbar(im, ax=ax, format='%+2.0f dB')
+#     # Create visualization
+#     fig, ax = plt.subplots(figsize=(12, 6))
+#     im = ax.imshow(mel_outputs_postnet[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
+#     ax.set_title(f'Mel Spectrogram')
+#     ax.set_xlabel('Time')
+#     ax.set_ylabel('Mel Frequency')
+#     fig.colorbar(im, ax=ax, format='%+2.0f dB')
     
-    audio = inverse_mel_spec_to_wav(mel_outputs_postnet[0].cpu())
     
-    return audio, fig
+    
+#     return audio, fig
 
 
 
@@ -216,9 +216,9 @@ def inference_utterance(
     ax.set_ylabel('Mel Frequency')
     fig.colorbar(im, ax=ax, format='%+2.0f dB')
     
-    # print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
+    audio = inverse_mel_spec_to_wav(mel_outputs_postnet[0].cpu())
     
-    return mel_outputs_postnet[0].cpu(), fig
+    return audio, fig
 
 
 def train(output_directory, checkpoint_path, warm_start, n_gpus,
