@@ -2,3 +2,6 @@ test.ipynb
 wandb/*
 __pycache__
 sample_audio
+test
+data
+out

@@ -7,13 +7,19 @@ class SinhalaTokenizerTacotron(Tokenizer):
             text_list: List[str],
             max_length: int = 256, 
             memory_efficient: bool = False,
+            vocab_map: dict = {},
             chunk_size: int = 1000,
             unknown_token: str = "<|unk|>", 
             pad_token: str = "<|pad|>", 
             end_of_text_token: str = "<|endoftext|>"
             ):
         super().__init__(max_length, unknown_token, pad_token, end_of_text_token)
-        self.init_vocab(text_list, memory_efficient, chunk_size)
+        if text_list:
+            self.init_vocab(text_list, memory_efficient, chunk_size)
+        else:
+            self.vocab_map = vocab_map
+            self.reorganize_vocab_dict()
+
 
 
     def reorganize_vocab_dict(self):

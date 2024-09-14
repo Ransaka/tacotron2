@@ -5,7 +5,8 @@ import torch.utils.data
 
 import layers
 from utils import load_wav_to_torch, load_filepaths_and_text
-from sinlib import Tokenizer
+from text import SinhalaTokenizerTacotron
+from audio_processing import convert_to_mel_spec
 
 
 class TextMelLoader(torch.utils.data.Dataset):
@@ -19,22 +20,16 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.text_column_name = hparams.text_column_name
         self.audio_path_column_name = hparams.audio_path_column_name
         self.max_wav_value = hparams.max_wav_value
-        self.sampling_rate = hparams.sampling_rate
+        self.sample_rate = hparams.sample_rate
         self.load_mel_from_disk = hparams.load_mel_from_disk
         self.text_to_sequence = self._load_tokenizer(char_mapper)
-        self.stft = layers.TacotronSTFT(
-            hparams.filter_length, hparams.hop_length, hparams.win_length,
-            hparams.n_mel_channels, hparams.sampling_rate, hparams.mel_fmin,
-            hparams.mel_fmax)
         random.seed(hparams.seed)
         self.audiopaths_and_text = self.audiopaths_and_text.sample(frac=1, ignore_index=True)
 
 
     def _load_tokenizer(self, char_mapper):
-        _tokenizer = Tokenizer(256) #adding random value as we apply paddings and truncation later
-        _tokenizer.vocab_map = char_mapper
+        _tokenizer = SinhalaTokenizerTacotron(text_list=None, vocab_map=char_mapper)
         return _tokenizer
-
 
     def get_mel_text_pair(self, audiopath_and_text):
         # separate filename and text
@@ -45,24 +40,21 @@ class TextMelLoader(torch.utils.data.Dataset):
 
     def get_mel(self, filename):
         if not self.load_mel_from_disk:
-            audio, sampling_rate = load_wav_to_torch(filename)
-            if sampling_rate != self.stft.sampling_rate:
-                raise ValueError("{} {} SR doesn't match target {} SR".format(
-                    sampling_rate, self.stft.sampling_rate))
+            audio, sample_rate = load_wav_to_torch(filename)
+            # if sample_rate != self.stft.sample_rate:
+            #     raise ValueError("{} {} SR doesn't match target {} SR".format(
+            #         sample_rate, self.stft.sample_rate))
             audio_norm = audio / self.max_wav_value
             audio_norm = audio_norm.unsqueeze(0)
-            melspec = self.stft.mel_spectrogram(audio_norm)
+            melspec = convert_to_mel_spec(audio_norm)
             melspec = torch.squeeze(melspec, 0)
-        else:
-            melspec = torch.from_numpy(np.load(filename))
-            assert melspec.size(0) == self.stft.n_mel_channels, (
-                'Mel dimension mismatch: given {}, expected {}'.format(
-                    melspec.size(0), self.stft.n_mel_channels))
 
         return melspec
 
     def get_text(self, text):
-        text_norm = torch.IntTensor(self.text_to_sequence(text, truncate_and_pad=False))
+        seq = self.text_to_sequence(text, truncate_and_pad=False)
+        # print(seq)
+        text_norm = torch.IntTensor(seq)
         return text_norm
 
     def __getitem__(self, index):

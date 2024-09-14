@@ -16,14 +16,14 @@ spec_transform = torchaudio.transforms.Spectrogram(
 
 
 mel_scale_transform = torchaudio.transforms.MelScale(
-  n_mels=config.mel_freq, 
+  n_mels=config.n_mel_channels, 
   sample_rate=config.sample_rate, 
   n_stft=config.n_stft
 )
 
 
 mel_inverse_transform = torchaudio.transforms.InverseMelScale(
-  n_mels=config.mel_freq, 
+  n_mels=config.n_mel_channels, 
   sample_rate=config.sample_rate, 
   n_stft=config.n_stft
 )

@@ -13,8 +13,8 @@ ignore_layers:
 
 # Data Parameters
 load_mel_from_disk: false
-training_files: 'filelists/ljs_audio_text_train_filelist.txt'
-validation_files: 'filelists/ljs_audio_text_val_filelist.txt'
+training_files: 'data/metadata.csv'
+validation_files: 'data/metadata.csv'
 text_cleaners: 
 audio_path_column_name: audio
 text_column_name: text
@@ -40,6 +40,7 @@ ampl_ref: 1.0
 sample_rate: 16000
 ampl_power: 1.0
 n_mel_channels: 80
+max_wav_value: 1.0 #experiment on this
 
 # Model Parameters
 n_symbols: 680 # This needs to be set dynamically based on len(symbols)
@@ -81,7 +82,8 @@ batch_size: 64
 mask_padding: true  # set model's padded outputs to padded values
 
 #logging
-logging: true
+logging: false
+push_to_hub: false
 wandb_api_key: "API_KEY"
 hf_api_key: "API_KEY"
 run_name: "tacotron2-sinhala"

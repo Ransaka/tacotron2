@@ -66,7 +66,7 @@ def inference_utterance(model,device: str = 'cuda') -> Tuple[torch.Tensor, plt.F
     ax.set_ylabel('Mel Frequency')
     fig.colorbar(im, ax=ax, format='%+2.0f dB')
     
-    print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
+    # print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
     
     return mel_outputs_postnet[0].cpu(), fig
 
@@ -147,7 +147,8 @@ def save_checkpoint(model, optimizer, learning_rate, iteration, filepath, to_hf=
             path_or_fileobj=filepath,
             path_in_repo=filepath.split("/")[-1],
             repo_type='model',
-            repo_id=hparams.hf_repo_id
+            repo_id=hparams.hf_repo_id,
+            token=hparams.hf_api_key
         )
 
 
@@ -177,22 +178,25 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
     model.train()
     if rank == 0:
         print("Validation loss {}: {:9f}  ".format(iteration, val_loss))
-        logger.log(
-            {
-                "val_loss": val_loss, 
-                "iteration": iteration,
-                "utterance": wandb.Image(mel_hist, caption="Example utterance")
-            }
-        )
+        if logger:
+            logger.log(
+                {
+                    "val_loss": val_loss, 
+                    "iteration": iteration,
+                    "utterance": wandb.Image(mel_hist, caption="Example utterance")
+                }
+            )
 
 
-def inference_utterance(model, text: str='ඔයාගේ නැටුම්වලට', device: str = 'cuda') -> Tuple[torch.Tensor, plt.Figure]:
+def inference_utterance(
+        model, 
+        text: str='hello world', 
+        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    ) -> Tuple[torch.Tensor, plt.Figure]:
     model.eval()
-    model.to(device)
     
     # Convert text to sequence
     sequence = torch.tensor(model.text_to_sequence(text, truncate_and_pad=False)).unsqueeze(0).to(device)
-    
     with torch.no_grad():
         outputs = model.inference(sequence)
     
@@ -206,7 +210,7 @@ def inference_utterance(model, text: str='ඔයාගේ නැටුම්ව�
     ax.set_ylabel('Mel Frequency')
     fig.colorbar(im, ax=ax, format='%+2.0f dB')
     
-    print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
+    # print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
     
     return mel_outputs_postnet[0].cpu(), fig
 
@@ -235,6 +239,7 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
                                  weight_decay=hparams.weight_decay)
 
     logging = hparams.logging
+    logger = None
     if logging:
         wandb.login(key=hparams.wandb_api_key)
         logger = wandb.init(project="Tacotron2", config=hparams, name=hparams.run_name+str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
@@ -308,7 +313,8 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
                 duration = time.perf_counter() - start
                 print("Train loss {} {:.6f} Grad Norm {:.6f} {:.2f}s/it".format(
                     iteration, reduced_loss, grad_norm, duration))
-                logger.log({"train_loss": reduced_loss, "grad_norm": grad_norm, "duration": duration, "iteration": iteration})
+                if logging:
+                    logger.log({"train_loss": reduced_loss, "grad_norm": grad_norm, "duration": duration, "iteration": iteration})
 
             if not is_overflow and (iteration % hparams.iters_per_checkpoint == 0):
                 validate(model, criterion, valset, iteration,
@@ -318,7 +324,7 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
                     checkpoint_path = os.path.join(
                         output_directory, "checkpoint_{}".format(iteration))
                     save_checkpoint(model, optimizer, learning_rate, iteration,
-                                    checkpoint_path)
+                                    checkpoint_path, hparams.push_to_hub)
 
             iteration += 1
 
@@ -352,5 +358,5 @@ if __name__ == '__main__':
     print("cuDNN Enabled:", hparams.cudnn_enabled)
     print("cuDNN Benchmark:", hparams.cudnn_benchmark)
 
-    train(args.output_directory, args.log_directory, args.checkpoint_path,
+    train(args.output_directory, args.checkpoint_path,
           args.warm_start, args.n_gpus, args.rank, args.group_name, hparams)
