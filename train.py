@@ -83,7 +83,9 @@ def init_distributed(hparams, n_gpus, rank, group_name):
 
 def prepare_dataloaders(hparams):
     # Get data, data loaders and collate function ready
-    _train_and_val_files = pd.concat([pd.read_csv(fp) for fp in [hparams.training_files, hparams.validation_files]])
+    train_metadata_file = os.path.join(hparams.data_dir, hparams.training_files)
+    val_metadata_file = os.path.join(hparams.data_dir, hparams.validation_files)
+    _train_and_val_files = pd.concat([pd.read_csv(fp) for fp in [train_metadata_file, val_metadata_file]])
     _text_lines = _train_and_val_files[hparams.text_column_name].values.tolist()
     _tokenizer = SinhalaTokenizerTacotron(text_list=_text_lines)
     trainset = TextMelLoader(hparams.training_files, _tokenizer.vocab_map ,hparams)

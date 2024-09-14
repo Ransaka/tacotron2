@@ -17,3 +17,6 @@ def get_data():
     test_fp = os.path.join(config.data_dir, config.validation_files)
     train_df.to_csv(train_fp, index=False)
     val_df.to_csv(test_fp, index=False)
+
+if __name__ == "__main__":
+    get_data()
