@@ -80,11 +80,3 @@ weight_decay: 1e-6
 grad_clip_thresh: 1.0
 batch_size: 64
 mask_padding: true  # set model's padded outputs to padded values
-
-#logging
-logging: false
-push_to_hub: false
-wandb_api_key: "API_KEY"
-hf_api_key: "API_KEY"
-run_name: "tacotron2-sinhala"
-hf_repo_id: "REPO_ID"
