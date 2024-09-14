@@ -1,8 +1,16 @@
+from datetime import datetime
 import os
 import time
 import argparse
 import math
 from numpy import finfo
+from omegaconf import OmegaConf
+import wandb
+import pandas as pd
+from huggingface_hub import upload_file
+import torch
+import matplotlib.pyplot as plt
+from typing import Tuple
 
 import torch
 from distributed import apply_gradient_allreduce
@@ -13,8 +21,7 @@ from torch.utils.data import DataLoader
 from model import Tacotron2
 from data_utils import TextMelLoader, TextMelCollate
 from loss_function import Tacotron2Loss
-from logger import Tacotron2Logger
-from hparams import create_hparams
+from text import SinhalaTokenizerTacotron
 
 
 def reduce_tensor(tensor, n_gpus):
@@ -39,10 +46,39 @@ def init_distributed(hparams, n_gpus, rank, group_name):
     print("Done initializing distributed")
 
 
+def inference_utterance(model,device: str = 'cuda') -> Tuple[torch.Tensor, plt.Figure]:
+    model.eval()
+    model.to(device)
+    
+    # Convert text to sequence
+    sequence = torch.tensor([[10,20,304,40,20,20,20, 39 , 20]])
+    
+    with torch.no_grad():
+        outputs = model.inference(sequence)
+    
+    mel_outputs, mel_outputs_postnet, gate_outputs, alignments = outputs
+    
+    # Create visualization
+    fig, ax = plt.subplots(figsize=(12, 6))
+    im = ax.imshow(mel_outputs_postnet[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
+    ax.set_title(f'Mel Spectrogram')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Mel Frequency')
+    fig.colorbar(im, ax=ax, format='%+2.0f dB')
+    
+    print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
+    
+    return mel_outputs_postnet[0].cpu(), fig
+
+
+
 def prepare_dataloaders(hparams):
     # Get data, data loaders and collate function ready
-    trainset = TextMelLoader(hparams.training_files, hparams)
-    valset = TextMelLoader(hparams.validation_files, hparams)
+    _train_and_val_files = pd.concat([pd.read_csv(fp) for fp in [hparams.training_files, hparams.validation_files]])
+    _text_lines = _train_and_val_files[hparams.text_column_name].values.tolist()
+    _tokenizer = SinhalaTokenizerTacotron(text_list=_text_lines)
+    trainset = TextMelLoader(hparams.training_files, _tokenizer.vocab_map ,hparams)
+    valset = TextMelLoader(hparams.validation_files, _tokenizer.vocab_map,  hparams)
     collate_fn = TextMelCollate(hparams.n_frames_per_step)
 
     if hparams.distributed_run:
@@ -56,22 +92,12 @@ def prepare_dataloaders(hparams):
                               sampler=train_sampler,
                               batch_size=hparams.batch_size, pin_memory=False,
                               drop_last=True, collate_fn=collate_fn)
-    return train_loader, valset, collate_fn
-
-
-def prepare_directories_and_logger(output_directory, log_directory, rank):
-    if rank == 0:
-        if not os.path.isdir(output_directory):
-            os.makedirs(output_directory)
-            os.chmod(output_directory, 0o775)
-        logger = Tacotron2Logger(os.path.join(output_directory, log_directory))
-    else:
-        logger = None
-    return logger
+    return train_loader, valset, collate_fn, _tokenizer.vocab_map
 
 
 def load_model(hparams):
-    model = Tacotron2(hparams).cuda()
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model = Tacotron2(hparams).to(device)
     if hparams.fp16_run:
         model.decoder.attention_layer.score_mask_value = finfo('float16').min
 
@@ -109,13 +135,20 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     return model, optimizer, learning_rate, iteration
 
 
-def save_checkpoint(model, optimizer, learning_rate, iteration, filepath):
+def save_checkpoint(model, optimizer, learning_rate, iteration, filepath, to_hf=True):
     print("Saving model and optimizer state at iteration {} to {}".format(
         iteration, filepath))
     torch.save({'iteration': iteration,
                 'state_dict': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'learning_rate': learning_rate}, filepath)
+    if to_hf:
+        upload_file(
+            path_or_fileobj=filepath,
+            path_in_repo=filepath.split("/")[-1],
+            repo_type='model',
+            repo_id=hparams.hf_repo_id
+        )
 
 
 def validate(model, criterion, valset, iteration, batch_size, n_gpus,
@@ -140,20 +173,51 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
             val_loss += reduced_val_loss
         val_loss = val_loss / (i + 1)
 
+    mel_hist = inference_utterance(model)
     model.train()
     if rank == 0:
         print("Validation loss {}: {:9f}  ".format(iteration, val_loss))
-        logger.log_validation(val_loss, model, y, y_pred, iteration)
+        logger.log(
+            {
+                "val_loss": val_loss, 
+                "iteration": iteration,
+                "utterance": wandb.Image(mel_hist, caption="Example utterance")
+            }
+        )
 
 
-def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
+def inference_utterance(model, text: str='ඔයාගේ නැටුම්වලට', device: str = 'cuda') -> Tuple[torch.Tensor, plt.Figure]:
+    model.eval()
+    model.to(device)
+    
+    # Convert text to sequence
+    sequence = torch.tensor(model.text_to_sequence(text, truncate_and_pad=False)).unsqueeze(0).to(device)
+    
+    with torch.no_grad():
+        outputs = model.inference(sequence)
+    
+    mel_outputs, mel_outputs_postnet, gate_outputs, alignments = outputs
+    
+    # Create visualization
+    fig, ax = plt.subplots(figsize=(12, 6))
+    im = ax.imshow(mel_outputs_postnet[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
+    ax.set_title(f'Mel Spectrogram')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Mel Frequency')
+    fig.colorbar(im, ax=ax, format='%+2.0f dB')
+    
+    print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
+    
+    return mel_outputs_postnet[0].cpu(), fig
+
+
+def train(output_directory, checkpoint_path, warm_start, n_gpus,
           rank, group_name, hparams):
     """Training and validation logging results to tensorboard and stdout
 
     Params
     ------
     output_directory (string): directory to save checkpoints
-    log_directory (string) directory to save tensorboard logs
     checkpoint_path(string): checkpoint path
     n_gpus (int): number of gpus
     rank (int): rank of current gpu
@@ -170,6 +234,11 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
                                  weight_decay=hparams.weight_decay)
 
+    logging = hparams.logging
+    if logging:
+        wandb.login(key=hparams.wandb_api_key)
+        logger = wandb.init(project="Tacotron2", config=hparams, name=hparams.run_name+str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
     if hparams.fp16_run:
         from apex import amp
         model, optimizer = amp.initialize(
@@ -180,10 +249,10 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
 
     criterion = Tacotron2Loss()
 
-    logger = prepare_directories_and_logger(
-        output_directory, log_directory, rank)
+    train_loader, valset, collate_fn, vocab_map = prepare_dataloaders(hparams)
 
-    train_loader, valset, collate_fn = prepare_dataloaders(hparams)
+    #load learned tkenization map
+    model.load_tokenizer(char_map=vocab_map)
 
     # Load checkpoint if one exists
     iteration = 0
@@ -239,8 +308,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
                 duration = time.perf_counter() - start
                 print("Train loss {} {:.6f} Grad Norm {:.6f} {:.2f}s/it".format(
                     iteration, reduced_loss, grad_norm, duration))
-                logger.log_training(
-                    reduced_loss, grad_norm, learning_rate, duration, iteration)
+                logger.log({"train_loss": reduced_loss, "grad_norm": grad_norm, "duration": duration, "iteration": iteration})
 
             if not is_overflow and (iteration % hparams.iters_per_checkpoint == 0):
                 validate(model, criterion, valset, iteration,
@@ -257,10 +325,8 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-o', '--output_directory', type=str,
+    parser.add_argument('-o', '--output_directory', type=str, default='out',
                         help='directory to save checkpoints')
-    parser.add_argument('-l', '--log_directory', type=str,
-                        help='directory to save tensorboard logs')
     parser.add_argument('-c', '--checkpoint_path', type=str, default=None,
                         required=False, help='checkpoint path')
     parser.add_argument('--warm_start', action='store_true',
@@ -275,7 +341,7 @@ if __name__ == '__main__':
                         required=False, help='comma separated name=value pairs')
 
     args = parser.parse_args()
-    hparams = create_hparams(args.hparams)
+    hparams = OmegaConf.load('config.yaml')
 
     torch.backends.cudnn.enabled = hparams.cudnn_enabled
     torch.backends.cudnn.benchmark = hparams.cudnn_benchmark

@@ -84,7 +84,7 @@ class DynamicLossScaler:
 ##############################################################
 if __name__ == "__main__":
     import torch
-    from torch.autograd import Variable
+    # from torch.autograd import Variable
     from dynamic_loss_scaler import DynamicLossScaler
 
     # N is batch size; D_in is input dimension;
@@ -92,11 +92,11 @@ if __name__ == "__main__":
     N, D_in, H, D_out = 64, 1000, 100, 10
 
     # Create random Tensors to hold inputs and outputs, and wrap them in Variables.
-    x = Variable(torch.randn(N, D_in), requires_grad=False)
-    y = Variable(torch.randn(N, D_out), requires_grad=False)
+    x = torch.randn(N, D_in, requires_grad=False)
+    y = torch.randn(N, D_out, requires_grad=False)
 
-    w1 = Variable(torch.randn(D_in, H), requires_grad=True)
-    w2 = Variable(torch.randn(H, D_out), requires_grad=True)
+    w1 = torch.randn(D_in, H, requires_grad=True)
+    w2 = torch.randn(H, D_out, requires_grad=True)
     parameters = [w1, w2]
 
     learning_rate = 1e-6

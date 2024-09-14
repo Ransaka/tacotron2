@@ -5,7 +5,7 @@ import torch.utils.data
 
 import layers
 from utils import load_wav_to_torch, load_filepaths_and_text
-from text import text_to_sequence
+from sinlib import Tokenizer
 
 
 class TextMelLoader(torch.utils.data.Dataset):
@@ -14,22 +14,31 @@ class TextMelLoader(torch.utils.data.Dataset):
         2) normalizes text and converts them to sequences of one-hot vectors
         3) computes mel-spectrograms from audio files.
     """
-    def __init__(self, audiopaths_and_text, hparams):
+    def __init__(self, audiopaths_and_text, char_mapper, hparams):
         self.audiopaths_and_text = load_filepaths_and_text(audiopaths_and_text)
-        self.text_cleaners = hparams.text_cleaners
+        self.text_column_name = hparams.text_column_name
+        self.audio_path_column_name = hparams.audio_path_column_name
         self.max_wav_value = hparams.max_wav_value
         self.sampling_rate = hparams.sampling_rate
         self.load_mel_from_disk = hparams.load_mel_from_disk
+        self.text_to_sequence = self._load_tokenizer(char_mapper)
         self.stft = layers.TacotronSTFT(
             hparams.filter_length, hparams.hop_length, hparams.win_length,
             hparams.n_mel_channels, hparams.sampling_rate, hparams.mel_fmin,
             hparams.mel_fmax)
         random.seed(hparams.seed)
-        random.shuffle(self.audiopaths_and_text)
+        self.audiopaths_and_text = self.audiopaths_and_text.sample(frac=1, ignore_index=True)
+
+
+    def _load_tokenizer(self, char_mapper):
+        _tokenizer = Tokenizer(256) #adding random value as we apply paddings and truncation later
+        _tokenizer.vocab_map = char_mapper
+        return _tokenizer
+
 
     def get_mel_text_pair(self, audiopath_and_text):
         # separate filename and text
-        audiopath, text = audiopath_and_text[0], audiopath_and_text[1]
+        audiopath, text = audiopath_and_text[self.audio_path_column_name], audiopath_and_text[self.text_column_name]
         text = self.get_text(text)
         mel = self.get_mel(audiopath)
         return (text, mel)
@@ -42,7 +51,6 @@ class TextMelLoader(torch.utils.data.Dataset):
                     sampling_rate, self.stft.sampling_rate))
             audio_norm = audio / self.max_wav_value
             audio_norm = audio_norm.unsqueeze(0)
-            audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
             melspec = self.stft.mel_spectrogram(audio_norm)
             melspec = torch.squeeze(melspec, 0)
         else:
@@ -54,11 +62,11 @@ class TextMelLoader(torch.utils.data.Dataset):
         return melspec
 
     def get_text(self, text):
-        text_norm = torch.IntTensor(text_to_sequence(text, self.text_cleaners))
+        text_norm = torch.IntTensor(self.text_to_sequence(text, truncate_and_pad=False))
         return text_norm
 
     def __getitem__(self, index):
-        return self.get_mel_text_pair(self.audiopaths_and_text[index])
+        return self.get_mel_text_pair(self.audiopaths_and_text.iloc[index])
 
     def __len__(self):
         return len(self.audiopaths_and_text)

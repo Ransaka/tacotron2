@@ -1,11 +1,10 @@
 from math import sqrt
 import torch
-from torch.autograd import Variable
 from torch import nn
 from torch.nn import functional as F
 from layers import ConvNorm, LinearNorm
 from utils import to_gpu, get_mask_from_lengths
-
+from sinlib import Tokenizer
 
 class LocationLayer(nn.Module):
     def __init__(self, attention_n_filters, attention_kernel_size,
@@ -251,8 +250,10 @@ class Decoder(nn.Module):
         decoder_input: all zeros frames
         """
         B = memory.size(0)
-        decoder_input = Variable(memory.data.new(
-            B, self.n_mel_channels * self.n_frames_per_step).zero_())
+        decoder_input = torch.zeros(
+            B, self.n_mel_channels * self.n_frames_per_step,
+            device=memory.device, dtype=memory.dtype
+        )
         return decoder_input
 
     def initialize_decoder_states(self, memory, mask):
@@ -267,22 +268,19 @@ class Decoder(nn.Module):
         B = memory.size(0)
         MAX_TIME = memory.size(1)
 
-        self.attention_hidden = Variable(memory.data.new(
-            B, self.attention_rnn_dim).zero_())
-        self.attention_cell = Variable(memory.data.new(
-            B, self.attention_rnn_dim).zero_())
+        # Helper function to create zero tensors
+        def create_zero_tensor(size):
+            return torch.zeros(size, device=memory.device, dtype=memory.dtype)
 
-        self.decoder_hidden = Variable(memory.data.new(
-            B, self.decoder_rnn_dim).zero_())
-        self.decoder_cell = Variable(memory.data.new(
-            B, self.decoder_rnn_dim).zero_())
+        self.attention_hidden = create_zero_tensor((B, self.attention_rnn_dim))
+        self.attention_cell = create_zero_tensor((B, self.attention_rnn_dim))
 
-        self.attention_weights = Variable(memory.data.new(
-            B, MAX_TIME).zero_())
-        self.attention_weights_cum = Variable(memory.data.new(
-            B, MAX_TIME).zero_())
-        self.attention_context = Variable(memory.data.new(
-            B, self.encoder_embedding_dim).zero_())
+        self.decoder_hidden = create_zero_tensor((B, self.decoder_rnn_dim))
+        self.decoder_cell = create_zero_tensor((B, self.decoder_rnn_dim))
+
+        self.attention_weights = create_zero_tensor((B, MAX_TIME))
+        self.attention_weights_cum = create_zero_tensor((B, MAX_TIME))
+        self.attention_context = create_zero_tensor((B, self.encoder_embedding_dim))
 
         self.memory = memory
         self.processed_memory = self.attention_layer.memory_layer(memory)
@@ -457,6 +455,7 @@ class Decoder(nn.Module):
 class Tacotron2(nn.Module):
     def __init__(self, hparams):
         super(Tacotron2, self).__init__()
+        self.char_mapper = {}
         self.mask_padding = hparams.mask_padding
         self.fp16_run = hparams.fp16_run
         self.n_mel_channels = hparams.n_mel_channels
@@ -469,6 +468,15 @@ class Tacotron2(nn.Module):
         self.encoder = Encoder(hparams)
         self.decoder = Decoder(hparams)
         self.postnet = Postnet(hparams)
+    
+
+    def load_tokenizer(self, char_map):
+        if self.char_mapper and not hasattr(self, "text_to_sequence"): #if char mapper is not a empty dict
+            _tok = Tokenizer(256)
+            self.char_mapper = char_map
+            _tok.vocab_map = self.char_mapper
+            assert len(self.char_mapper) == self.embedding.weight.shape[0]
+            self.text_to_sequence = _tok
 
     def parse_batch(self, batch):
         text_padded, input_lengths, mel_padded, gate_padded, \
@@ -527,3 +535,17 @@ class Tacotron2(nn.Module):
             [mel_outputs, mel_outputs_postnet, gate_outputs, alignments])
 
         return outputs
+    
+    def inference_on_sample_text(self, text:str="ජන ජීවිතය"):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        sequence = torch.tensor(self.text_to_sequence(text, truncate_and_pad=False)).unsqueeze(0).to(device)
+        mel_outputs, mel_outputs_postnet, _, alignments = self.inference(sequence)
+        return mel_outputs, mel_outputs_postnet, alignments
+    
+if __name__ == "__main__":
+    from omegaconf import OmegaConf
+    config = OmegaConf.load("config.yaml")
+    print(config)
+    model = Tacotron2(config)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Number of parameters: {n_params/1e6:.3f}M")

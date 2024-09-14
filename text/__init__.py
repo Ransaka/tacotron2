@@ -1,74 +1,29 @@
-""" from https://github.com/keithito/tacotron """
-import re
-from text import cleaners
-from text.symbols import symbols
+from typing import List
+from sinlib import Tokenizer
+
+class SinhalaTokenizerTacotron(Tokenizer):
+    def __init__(
+            self, 
+            text_list: List[str],
+            max_length: int = 256, 
+            memory_efficient: bool = False,
+            chunk_size: int = 1000,
+            unknown_token: str = "<|unk|>", 
+            pad_token: str = "<|pad|>", 
+            end_of_text_token: str = "<|endoftext|>"
+            ):
+        super().__init__(max_length, unknown_token, pad_token, end_of_text_token)
+        self.init_vocab(text_list, memory_efficient, chunk_size)
 
 
-# Mappings from symbol to numeric ID and vice versa:
-_symbol_to_id = {s: i for i, s in enumerate(symbols)}
-_id_to_symbol = {i: s for i, s in enumerate(symbols)}
-
-# Regular expression matching text enclosed in curly braces:
-_curly_re = re.compile(r'(.*?)\{(.+?)\}(.*)')
-
-
-def text_to_sequence(text, cleaner_names):
-  '''Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
-
-    The text can optionally have ARPAbet sequences enclosed in curly braces embedded
-    in it. For example, "Turn left on {HH AW1 S S T AH0 N} Street."
-
-    Args:
-      text: string to convert to a sequence
-      cleaner_names: names of the cleaner functions to run the text through
-
-    Returns:
-      List of integers corresponding to the symbols in the text
-  '''
-  sequence = []
-
-  # Check for curly braces and treat their contents as ARPAbet:
-  while len(text):
-    m = _curly_re.match(text)
-    if not m:
-      sequence += _symbols_to_sequence(_clean_text(text, cleaner_names))
-      break
-    sequence += _symbols_to_sequence(_clean_text(m.group(1), cleaner_names))
-    sequence += _arpabet_to_sequence(m.group(2))
-    text = m.group(3)
-
-  return sequence
-
-
-def sequence_to_text(sequence):
-  '''Converts a sequence of IDs back to a string'''
-  result = ''
-  for symbol_id in sequence:
-    if symbol_id in _id_to_symbol:
-      s = _id_to_symbol[symbol_id]
-      # Enclose ARPAbet back in curly braces:
-      if len(s) > 1 and s[0] == '@':
-        s = '{%s}' % s[1:]
-      result += s
-  return result.replace('}{', ' ')
-
-
-def _clean_text(text, cleaner_names):
-  for name in cleaner_names:
-    cleaner = getattr(cleaners, name)
-    if not cleaner:
-      raise Exception('Unknown cleaner: %s' % name)
-    text = cleaner(text)
-  return text
-
-
-def _symbols_to_sequence(symbols):
-  return [_symbol_to_id[s] for s in symbols if _should_keep_symbol(s)]
-
-
-def _arpabet_to_sequence(text):
-  return _symbols_to_sequence(['@' + s for s in text.split()])
-
-
-def _should_keep_symbol(s):
-  return s in _symbol_to_id and s is not '_' and s is not '~'
+    def reorganize_vocab_dict(self):
+        _pad_token = self.pad_token
+        _vocab_map = self.vocab_map.copy()
+        _chars = [char for char in _vocab_map if char != _pad_token]
+        _chars = [_pad_token] + _chars  # making pad token in 0th position in the vocab map
+        self.vocab_map = {char: i for i, char in enumerate(_chars)}
+        
+    
+    def init_vocab(self, text_list, memory_efficient: bool = False, chunk_size: int = 1000):
+        super().train(text_list, memory_efficient, chunk_size)
+        self.reorganize_vocab_dict()
