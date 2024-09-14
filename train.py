@@ -11,6 +11,7 @@ from huggingface_hub import upload_file
 import torch
 import matplotlib.pyplot as plt
 from typing import Tuple
+import json
 
 import torch
 from distributed import apply_gradient_allreduce
@@ -22,7 +23,15 @@ from model import Tacotron2
 from data_utils import TextMelLoader, TextMelCollate
 from loss_function import Tacotron2Loss
 from text import SinhalaTokenizerTacotron
+from audio_processing import inverse_mel_spec_to_wav
 
+
+class ConfigEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if OmegaConf.is_config(obj):
+            return OmegaConf.to_container(obj, resolve=True)
+        return super().default(obj)
+    
 
 def reduce_tensor(tensor, n_gpus):
     rt = tensor.clone()
@@ -66,9 +75,9 @@ def inference_utterance(model,device: str = 'cuda') -> Tuple[torch.Tensor, plt.F
     ax.set_ylabel('Mel Frequency')
     fig.colorbar(im, ax=ax, format='%+2.0f dB')
     
-    # print(f"Mel output shape: {mel_outputs_postnet[0].cpu().numpy().shape}")
+    audio = inverse_mel_spec_to_wav(mel_outputs_postnet[0].cpu())
     
-    return mel_outputs_postnet[0].cpu(), fig
+    return audio, fig
 
 
 
@@ -174,18 +183,15 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
             val_loss += reduced_val_loss
         val_loss = val_loss / (i + 1)
 
-    mel_hist = inference_utterance(model)
+    audio, fig = inference_utterance(model)
     model.train()
     if rank == 0:
         print("Validation loss {}: {:9f}  ".format(iteration, val_loss))
         if logger:
-            logger.log(
-                {
-                    "val_loss": val_loss, 
-                    "iteration": iteration,
-                    "utterance": wandb.Image(mel_hist, caption="Example utterance")
-                }
-            )
+            logger.log({"val_loss": val_loss})
+            logger.log({"iteration": iteration})
+            logger.log({"Image/utterance": wandb.Image(fig, caption="Example Audio Mel Spec")})
+            logger.log({"Audio/audio": wandb.Audio(audio, sample_rate=hparams.sample_rate, caption="Example Audio Generated")})
 
 
 def inference_utterance(
@@ -242,7 +248,11 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
     logger = None
     if logging:
         wandb.login(key=hparams.wandb_api_key)
-        logger = wandb.init(project="Tacotron2", config=hparams, name=hparams.run_name+str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        config_dict = json.loads(json.dumps(hparams, cls=ConfigEncoder))
+        logger = wandb.init(
+            project="Tacotron2", 
+            config=config_dict, 
+            name=hparams.run_name+"-"+str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
     if hparams.fp16_run:
         from apex import amp
