@@ -196,7 +196,7 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
 
 def inference_utterance(
         model, 
-        text: str='hello world', 
+        text: str='ලබන වසරේ', 
         device: str = "cuda" if torch.cuda.is_available() else "cpu"
     ) -> Tuple[torch.Tensor, plt.Figure]:
     model.eval()

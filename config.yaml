@@ -13,8 +13,9 @@ ignore_layers:
 
 # Data Parameters
 load_mel_from_disk: false
-training_files: 'data/metadata.csv'
-validation_files: 'data/metadata.csv'
+data_dir: data
+training_files: 'metadata.csv'
+validation_files: 'metadata.csv'
 text_cleaners: 
 audio_path_column_name: audio
 text_column_name: text
@@ -80,11 +81,3 @@ weight_decay: 1e-6
 grad_clip_thresh: 1.0
 batch_size: 64
 mask_padding: true  # set model's padded outputs to padded values
-
-#logging
-logging: true
-push_to_hub: true
-wandb_api_key: "API_KEY"
-hf_api_key: "API_KEY"
-run_name: "tacotron2-sinhala"
-hf_repo_id: "Ransaka/tacotron2-sinhala"
