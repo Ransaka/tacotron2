@@ -7,6 +7,7 @@ config.n_stft = int(config.n_fft // 2 + 1)
 config.hop_length = int(config.n_fft / 8.0)
 config.win_length = int(config.n_fft / 2.0)
 
+
 spec_transform = torchaudio.transforms.Spectrogram(
     n_fft=config.n_fft, 
     win_length=config.win_length,
@@ -23,17 +24,23 @@ mel_scale_transform = torchaudio.transforms.MelScale(
 
 
 mel_inverse_transform = torchaudio.transforms.InverseMelScale(
-  n_mels=config.n_mel_channels, 
-  sample_rate=config.sample_rate, 
-  n_stft=config.n_stft
+    n_mels=config.n_mel_channels, 
+    sample_rate=config.sample_rate, 
+    n_stft=config.n_stft
 )
 
 
-griffnlim_transform = torchaudio.transforms.GriffinLim(
-    n_fft=config.n_fft,
-    win_length=config.win_length,
-    hop_length=config.hop_length
-)
+def pre_emphasis(x, coef=0.97):
+    return torch.cat((x[:, 0].unsqueeze(1), x[:, 1:] - coef * x[:, :-1]), dim=1)
+
+
+def de_emphasis(x, coef=0.97):
+    if x.dim() == 1:
+        x = x.unsqueeze(0)
+    x_ = x.clone()
+    for i in range(1, x_.size(-1)):
+        x_[..., i] += coef * x_[..., i-1]
+    return x_.squeeze(0)
 
 
 def norm_mel_spec_db(mel_spec):  
@@ -60,13 +67,13 @@ def pow_to_db_mel_spec(mel_spec):
 
 
 def db_to_power_mel_spec(mel_spec):
-  mel_spec = mel_spec*config.scale_db
-  mel_spec = torchaudio.functional.DB_to_amplitude(
-    mel_spec,
-    ref=config.ampl_ref,
-    power=config.ampl_power
-  )  
-  return mel_spec
+    mel_spec = mel_spec * config.scale_db
+    mel_spec = torchaudio.functional.DB_to_amplitude(
+        mel_spec,
+        ref=config.ampl_ref,
+        power=config.ampl_power
+    )  
+    return mel_spec
 
 
 def convert_to_mel_spec(wav):
@@ -79,8 +86,19 @@ def convert_to_mel_spec(wav):
   return db_mel_spec
 
 
-def inverse_mel_spec_to_wav(mel_spec):
-  power_mel_spec = db_to_power_mel_spec(mel_spec).cpu()
-  spectrogram = mel_inverse_transform(power_mel_spec)
-  pseudo_wav = griffnlim_transform(spectrogram)
-  return pseudo_wav
+def inverse_mel_spec_to_wav(mel_spec, n_iter=60):
+    power_mel_spec = db_to_power_mel_spec(mel_spec).cpu()
+    spectrogram = mel_inverse_transform(power_mel_spec)
+    
+    griffnlim_transform = torchaudio.transforms.GriffinLim(
+        n_fft=config.n_fft,
+        win_length=config.win_length,
+        hop_length=config.hop_length,
+        n_iter=n_iter
+    )
+    
+    pseudo_wav = griffnlim_transform(spectrogram)
+
+    # pseudo_wav = de_emphasis(pseudo_wav)
+    
+    return pseudo_wav

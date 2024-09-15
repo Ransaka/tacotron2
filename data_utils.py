@@ -44,10 +44,10 @@ class TextMelLoader(torch.utils.data.Dataset):
             # if sample_rate != self.stft.sample_rate:
             #     raise ValueError("{} {} SR doesn't match target {} SR".format(
             #         sample_rate, self.stft.sample_rate))
-            audio_norm = audio / self.max_wav_value
-            audio_norm = audio_norm.unsqueeze(0)
-            melspec = convert_to_mel_spec(audio_norm)
-            melspec = torch.squeeze(melspec, 0)
+            # audio_norm = audio / self.max_wav_value
+            # audio_norm = audio_norm.unsqueeze(0)
+            melspec = convert_to_mel_spec(audio)
+            # melspec = torch.squeeze(melspec, 0)
 
         return melspec
 
@@ -65,7 +65,7 @@ class TextMelLoader(torch.utils.data.Dataset):
 
 
 class TextMelCollate():
-    """ Zero-pads model inputs and targets based on number of frames per setep
+    """ Zero-pads model inputs and targets based on number of frames per step
     """
     def __init__(self, n_frames_per_step):
         self.n_frames_per_step = n_frames_per_step

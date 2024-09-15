@@ -44,7 +44,7 @@ n_mel_channels: 80
 max_wav_value: 1.0 #experiment on this
 
 # Model Parameters
-n_symbols: 680 # This needs to be set dynamically based on len(symbols)
+n_symbols: ??? # This needs to be set dynamically based on len(symbols)
 symbols_embedding_dim: 512
 
 # Encoder parameters

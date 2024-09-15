@@ -128,7 +128,7 @@ def save_checkpoint(model, optimizer, learning_rate, iteration, filepath, to_hf=
         'state_dict': model.state_dict(),
         'optimizer': optimizer.state_dict(),
         'learning_rate': learning_rate,
-        'char_map': model.char_map
+        'char_map': model.char_mapper
         },
         filepath
     )
@@ -220,6 +220,9 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
     torch.manual_seed(hparams.seed)
     torch.cuda.manual_seed(hparams.seed)
 
+    train_loader, valset, collate_fn, vocab_map = prepare_dataloaders(hparams)
+    hparams.n_symbols = len(vocab_map)
+
     model = load_model(hparams)
     learning_rate = hparams.learning_rate
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
@@ -245,8 +248,6 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
 
     criterion = Tacotron2Loss()
 
-    train_loader, valset, collate_fn, vocab_map = prepare_dataloaders(hparams)
-
     #load learned tkenization map
     model.load_tokenizer(char_map=vocab_map)
 
@@ -267,6 +268,7 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
 
     model.train()
     is_overflow = False
+    debugging = True
     # ================ MAIN TRAINNIG LOOP! ===================
     for epoch in range(epoch_offset, hparams.epochs):
         print("Epoch: {}".format(epoch))
@@ -277,6 +279,25 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
 
             model.zero_grad()
             x, y = model.parse_batch(batch)
+
+            #debugging purpose
+            if debugging:
+                text_padded, input_lengths, mel_padded, gate_padded, output_lengths = x
+                train_loader.text_to_sequence.special_tokens = []
+                train_loader.text_to_sequence.token_id_to_token_map = {val:key for key,val in train_loader.text_to_sequence.vocab_map.items()}
+                decoded_text = train_loader.text_to_sequence.decode(text_padded[0].detach().cpu().numpy())
+                torch.save(
+                    {
+                        "x":x,
+                        "y":y,
+                        "decoded_text": decoded_text,
+                        "encoded_text": text_padded[0]
+                     },
+                     "sample_batch.pt"
+                )
+                debugging = False
+            #end debugging
+
             y_pred = model(x)
 
             loss = criterion(y_pred, y)
