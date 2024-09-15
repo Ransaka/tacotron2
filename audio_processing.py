@@ -2,12 +2,12 @@ import torch
 import torchaudio
 from omegaconf import OmegaConf
 import numpy as np
+import torchaudio.transforms as T
 
 config = OmegaConf.load("config.yaml")
 config.n_stft = int(config.n_fft // 2 + 1)
 config.hop_length = int(config.n_fft / 8.0)
 config.win_length = int(config.n_fft / 2.0)
-
 
 spec_transform = torchaudio.transforms.Spectrogram(
     n_fft=config.n_fft, 
@@ -16,13 +16,11 @@ spec_transform = torchaudio.transforms.Spectrogram(
     power=config.power
 )
 
-
 mel_scale_transform = torchaudio.transforms.MelScale(
   n_mels=config.n_mel_channels, 
   sample_rate=config.sample_rate, 
   n_stft=config.n_stft
 )
-
 
 mel_inverse_transform = torchaudio.transforms.InverseMelScale(
     n_mels=config.n_mel_channels, 
@@ -30,10 +28,8 @@ mel_inverse_transform = torchaudio.transforms.InverseMelScale(
     n_stft=config.n_stft
 )
 
-
 def pre_emphasis(x, coef=0.97):
     return torch.cat((x[:, 0].unsqueeze(1), x[:, 1:] - coef * x[:, :-1]), dim=1)
-
 
 def de_emphasis(x, coef=0.97):
     if x.dim() == 1:
@@ -43,17 +39,14 @@ def de_emphasis(x, coef=0.97):
         x_[..., i] += coef * x_[..., i-1]
     return x_.squeeze(0)
 
-
 def norm_mel_spec_db(mel_spec):  
-  mel_spec = ((2.0*mel_spec - config.min_level_db) / (config.max_db/config.norm_db)) - 1.0
-  mel_spec = torch.clip(mel_spec, -config.ref*config.norm_db, config.ref*config.norm_db)
-  return mel_spec
-
+    mel_spec = ((2.0*mel_spec - config.min_level_db) / (config.max_db/config.norm_db)) - 1.0
+    mel_spec = torch.clip(mel_spec, -config.ref*config.norm_db, config.ref*config.norm_db)
+    return mel_spec
 
 def denorm_mel_spec_db(mel_spec):
-  mel_spec = (((1.0 + mel_spec) * (config.max_db/config.norm_db)) + config.min_level_db) / 2.0 
-  return mel_spec
-
+    mel_spec = (((1.0 + mel_spec) * (config.max_db/config.norm_db)) + config.min_level_db) / 2.0 
+    return mel_spec
 
 def ensure_tensor(x):
     if isinstance(x, np.ndarray):
@@ -86,7 +79,6 @@ def inverse_mel_spec_to_wav(mel_spec, n_iter=60):
     
     return pseudo_wav
 
-# Update other functions similarly
 def pow_to_db_mel_spec(mel_spec):
     mel_spec = ensure_tensor(mel_spec)
     mel_spec = torchaudio.functional.amplitude_to_DB(
@@ -99,8 +91,36 @@ def pow_to_db_mel_spec(mel_spec):
     mel_spec = mel_spec/config.scale_db
     return mel_spec
 
+def loudness_normalize(wav, target_lufs=-23.0, sample_rate=16000):
+    meter = T.Loudness(sample_rate)
+    
+    # Ensure wav is 2D: (channels, samples)
+    if wav.dim() == 1:
+        wav = wav.unsqueeze(0)
+    elif wav.dim() > 2:
+        raise ValueError(f"Expected 1D or 2D tensor, got {wav.dim()}D")
+    
+    # Ensure proper shape: (batch, channels, samples) for meter
+    if wav.dim() == 2:
+        wav = wav.unsqueeze(0)
+    
+    loudness = meter(wav)
+    gain = 10**((target_lufs - loudness) / 20)
+    
+    # Apply gain and remove batch dimension if it was added
+    normalized_wav = (wav.squeeze(0) * gain).clamp(-1, 1)
+    
+    return normalized_wav
+
 def convert_to_mel_spec(wav):
     wav = ensure_tensor(wav)
+    
+    # Apply loudness normalization
+    wav = loudness_normalize(wav, target_lufs=-23.0, sample_rate=config.sample_rate)
+    
+    # Apply pre-emphasis
+    wav = pre_emphasis(wav)
+    
     spec = spec_transform(wav)
     mel_spec = mel_scale_transform(spec)
     db_mel_spec = pow_to_db_mel_spec(mel_spec)
