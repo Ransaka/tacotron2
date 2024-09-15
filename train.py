@@ -55,32 +55,6 @@ def init_distributed(hparams, n_gpus, rank, group_name):
     print("Done initializing distributed")
 
 
-# def inference_utterance(model,device: str = 'cuda') -> Tuple[torch.Tensor, plt.Figure]:
-#     model.eval()
-#     model.to(device)
-    
-#     # Convert text to sequence
-#     sequence = torch.tensor([[10,20,304,40,20,20,20, 39 , 20]])
-    
-#     with torch.no_grad():
-#         outputs = model.inference(sequence)
-    
-#     mel_outputs, mel_outputs_postnet, gate_outputs, alignments = outputs
-    
-#     # Create visualization
-#     fig, ax = plt.subplots(figsize=(12, 6))
-#     im = ax.imshow(mel_outputs_postnet[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
-#     ax.set_title(f'Mel Spectrogram')
-#     ax.set_xlabel('Time')
-#     ax.set_ylabel('Mel Frequency')
-#     fig.colorbar(im, ax=ax, format='%+2.0f dB')
-    
-    
-    
-#     return audio, fig
-
-
-
 def prepare_dataloaders(hparams):
     # Get data, data loaders and collate function ready
     train_metadata_file = os.path.join(hparams.data_dir, hparams.training_files)
@@ -149,10 +123,15 @@ def load_checkpoint(checkpoint_path, model, optimizer):
 def save_checkpoint(model, optimizer, learning_rate, iteration, filepath, to_hf=True):
     print("Saving model and optimizer state at iteration {} to {}".format(
         iteration, filepath))
-    torch.save({'iteration': iteration,
-                'state_dict': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'learning_rate': learning_rate}, filepath)
+    torch.save(
+        {'iteration': iteration,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'learning_rate': learning_rate,
+        'char_map': model.char_map
+        },
+        filepath
+    )
     if to_hf:
         upload_file(
             path_or_fileobj=filepath,
