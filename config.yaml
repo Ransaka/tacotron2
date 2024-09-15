@@ -76,8 +76,9 @@ postnet_n_convolutions: 5
 
 # Optimization Hyperparameters
 use_saved_learning_rate: false
-learning_rate: 1e-3
-weight_decay: 1e-6
+learning_rate: 1e-4
+weight_decay: 1e-5
 grad_clip_thresh: 1.0
 batch_size: 64
+lr_gamma: 0.95
 mask_padding: true  # set model's padded outputs to padded values

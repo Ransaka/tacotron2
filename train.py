@@ -7,6 +7,7 @@ from numpy import finfo
 from omegaconf import OmegaConf
 import wandb
 import pandas as pd
+import numpy as np
 from huggingface_hub import upload_file
 import torch
 import matplotlib.pyplot as plt
@@ -18,6 +19,9 @@ from distributed import apply_gradient_allreduce
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ExponentialLR
+
+
 
 from model import Tacotron2
 from data_utils import TextMelLoader, TextMelCollate
@@ -107,31 +111,31 @@ def warm_start_model(checkpoint_path, model, ignore_layers):
     return model
 
 
-def load_checkpoint(checkpoint_path, model, optimizer):
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler):
     assert os.path.isfile(checkpoint_path)
     print("Loading checkpoint '{}'".format(checkpoint_path))
     checkpoint_dict = torch.load(checkpoint_path, map_location='cpu')
     model.load_state_dict(checkpoint_dict['state_dict'])
     optimizer.load_state_dict(checkpoint_dict['optimizer'])
+    scheduler.load_state_dict(checkpoint_dict['scheduler'])
     learning_rate = checkpoint_dict['learning_rate']
     iteration = checkpoint_dict['iteration']
-    print("Loaded checkpoint '{}' from iteration {}" .format(
+    print("Loaded checkpoint '{}' from iteration {}".format(
         checkpoint_path, iteration))
-    return model, optimizer, learning_rate, iteration
+    return model, optimizer, scheduler, learning_rate, iteration
 
 
-def save_checkpoint(model, optimizer, learning_rate, iteration, filepath, to_hf=True):
+def save_checkpoint(model, optimizer, scheduler, learning_rate, iteration, filepath, to_hf=True):
     print("Saving model and optimizer state at iteration {} to {}".format(
         iteration, filepath))
-    torch.save(
-        {'iteration': iteration,
+    torch.save({
+        'iteration': iteration,
         'state_dict': model.state_dict(),
         'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict(),
         'learning_rate': learning_rate,
         'char_map': model.char_mapper
-        },
-        filepath
-    )
+    }, filepath)
     if to_hf:
         upload_file(
             path_or_fileobj=filepath,
@@ -164,14 +168,15 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
             val_loss += reduced_val_loss
         val_loss = val_loss / (i + 1)
 
-    audio, fig = inference_utterance(model)
+    audio, fig_mel, fig_align = inference_utterance(model)
     model.train()
     if rank == 0:
         print("Validation loss {}: {:9f}  ".format(iteration, val_loss))
         if logger:
             logger.log({"val_loss": val_loss})
             logger.log({"iteration": iteration})
-            logger.log({"Image/utterance": wandb.Image(fig, caption="Example Audio Mel Spec")})
+            logger.log({"Image/utterance": wandb.Image(fig_mel, caption="Example Audio Mel Spec")})
+            logger.log({"Image/alignments": wandb.Image(fig_align, caption="Example Attention Alignments")})
             logger.log({"Audio/audio": wandb.Audio(audio, sample_rate=hparams.sample_rate, caption="Example Audio Generated")})
 
 
@@ -179,7 +184,7 @@ def inference_utterance(
         model, 
         text: str='ලබන වසරේ', 
         device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    ) -> Tuple[torch.Tensor, plt.Figure]:
+    ) -> Tuple[np.ndarray, plt.Figure, plt.Figure]:
     model.eval()
     
     # Convert text to sequence
@@ -189,17 +194,26 @@ def inference_utterance(
     
     mel_outputs, mel_outputs_postnet, gate_outputs, alignments = outputs
     
-    # Create visualization
-    fig, ax = plt.subplots(figsize=(12, 6))
-    im = ax.imshow(mel_outputs_postnet[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
-    ax.set_title(f'Mel Spectrogram')
-    ax.set_xlabel('Time')
-    ax.set_ylabel('Mel Frequency')
-    fig.colorbar(im, ax=ax, format='%+2.0f dB')
+    # Create mel spectrogram visualization
+    fig_mel, ax_mel = plt.subplots(figsize=(12, 6))
+    im_mel = ax_mel.imshow(mel_outputs_postnet[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
+    ax_mel.set_title('Mel Spectrogram')
+    ax_mel.set_xlabel('Time')
+    ax_mel.set_ylabel('Mel Frequency')
+    fig_mel.colorbar(im_mel, ax=ax_mel, format='%+2.0f dB')
+
+    # Create alignment visualization
+    fig_align, ax_align = plt.subplots(figsize=(12, 6))
+    im_align = ax_align.imshow(alignments[0].cpu().numpy(), aspect='auto', origin='lower', interpolation='none')
+    ax_align.set_title('Alignment')
+    ax_align.set_xlabel('Decoder Steps')
+    ax_align.set_ylabel('Encoder Steps')
+    fig_align.colorbar(im_align, ax=ax_align)
     
-    audio = inverse_mel_spec_to_wav(mel_outputs_postnet[0].cpu())
+    # Convert mel spectrogram to audio
+    audio = inverse_mel_spec_to_wav(mel_outputs_postnet[0].cpu().numpy())
     
-    return audio, fig
+    return audio, fig_mel, fig_align
 
 
 def train(output_directory, checkpoint_path, warm_start, n_gpus,
@@ -227,6 +241,9 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
     learning_rate = hparams.learning_rate
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
                                  weight_decay=hparams.weight_decay)
+    
+    #adding lr scheduler
+    scheduler = ExponentialLR(optimizer, gamma=hparams.lr_gamma)
 
     logging = hparams.logging
     logger = None
@@ -259,8 +276,8 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
             model = warm_start_model(
                 checkpoint_path, model, hparams.ignore_layers)
         else:
-            model, optimizer, _learning_rate, iteration = load_checkpoint(
-                checkpoint_path, model, optimizer)
+            model, optimizer, scheduler, _learning_rate, iteration = load_checkpoint(
+                checkpoint_path, model, optimizer, scheduler)
             if hparams.use_saved_learning_rate:
                 learning_rate = _learning_rate
             iteration += 1  # next iteration is iteration + 1
@@ -271,74 +288,52 @@ def train(output_directory, checkpoint_path, warm_start, n_gpus,
     debugging = True
     # ================ MAIN TRAINNIG LOOP! ===================
     for epoch in range(epoch_offset, hparams.epochs):
-        print("Epoch: {}".format(epoch))
+        print(f"Epoch: {epoch}")
         for i, batch in enumerate(train_loader):
             start = time.perf_counter()
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = learning_rate
-
+            
             model.zero_grad()
             x, y = model.parse_batch(batch)
-
-            #debugging purpose
-            if debugging:
-                text_padded, input_lengths, mel_padded, gate_padded, output_lengths = x
-                train_loader.text_to_sequence.special_tokens = []
-                train_loader.text_to_sequence.token_id_to_token_map = {val:key for key,val in train_loader.text_to_sequence.vocab_map.items()}
-                decoded_text = train_loader.text_to_sequence.decode(text_padded[0].detach().cpu().numpy())
-                torch.save(
-                    {
-                        "x":x,
-                        "y":y,
-                        "decoded_text": decoded_text,
-                        "encoded_text": text_padded[0]
-                     },
-                     "sample_batch.pt"
-                )
-                debugging = False
-            #end debugging
-
             y_pred = model(x)
-
             loss = criterion(y_pred, y)
-            if hparams.distributed_run:
-                reduced_loss = reduce_tensor(loss.data, n_gpus).item()
-            else:
-                reduced_loss = loss.item()
+            
             if hparams.fp16_run:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
             else:
                 loss.backward()
-
-            if hparams.fp16_run:
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    amp.master_params(optimizer), hparams.grad_clip_thresh)
-                is_overflow = math.isnan(grad_norm)
-            else:
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), hparams.grad_clip_thresh)
-
+            
+            # Compute gradient norm before clipping
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), hparams.grad_clip_thresh)
+            
             optimizer.step()
-
-            if not is_overflow and rank == 0:
+            
+            if rank == 0:
+                reduced_loss = reduce_tensor(loss.data, n_gpus).item() if hparams.distributed_run else loss.item()
                 duration = time.perf_counter() - start
-                print("Train loss {} {:.6f} Grad Norm {:.6f} {:.2f}s/it".format(
-                    iteration, reduced_loss, grad_norm, duration))
+                current_lr = optimizer.param_groups[0]['lr']
+                
+                print(f"Train loss {iteration} {reduced_loss:.6f} {duration:.2f}s/it")
+                print(f"Gradient norm: {grad_norm:.6f}, Learning rate: {current_lr:.6f}")
+                
                 if logging:
-                    logger.log({"train_loss": reduced_loss, "grad_norm": grad_norm, "duration": duration, "iteration": iteration})
-
-            if not is_overflow and (iteration % hparams.iters_per_checkpoint == 0):
-                validate(model, criterion, valset, iteration,
-                         hparams.batch_size, n_gpus, collate_fn, logger,
-                         hparams.distributed_run, rank)
+                    logger.log({
+                        "train_loss": reduced_loss,
+                        "duration": duration,
+                        "iteration": iteration,
+                        "gradient_norm": grad_norm,
+                        "learning_rate": current_lr
+                    })
+            
+            if iteration % hparams.iters_per_checkpoint == 0:
+                validate(model, criterion, valset, iteration, hparams.batch_size, n_gpus, collate_fn, logger, hparams.distributed_run, rank)
                 if rank == 0:
-                    checkpoint_path = os.path.join(
-                        output_directory, "checkpoint_{}".format(iteration))
-                    save_checkpoint(model, optimizer, learning_rate, iteration,
-                                    checkpoint_path, hparams.push_to_hub)
-
+                    checkpoint_path = os.path.join(output_directory, f"checkpoint_{iteration}")
+                    save_checkpoint(model, optimizer, scheduler, current_lr, iteration, checkpoint_path, hparams.push_to_hub)
+            
             iteration += 1
+        
+        scheduler.step()
 
 
 if __name__ == '__main__':
