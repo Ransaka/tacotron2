@@ -27,7 +27,6 @@ from model import Tacotron2
 from data_utils import TextMelLoader, TextMelCollate
 from loss_function import Tacotron2Loss
 from text import SinhalaTokenizerTacotron
-from audio_processing import inverse_mel_spec_to_wav
 
 
 class ConfigEncoder(json.JSONEncoder):
@@ -168,7 +167,7 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
             val_loss += reduced_val_loss
         val_loss = val_loss / (i + 1)
 
-    audio, fig_mel, fig_align = inference_utterance(model)
+    fig_mel, fig_align = inference_utterance(model)
     model.train()
     if rank == 0:
         print("Validation loss {}: {:9f}  ".format(iteration, val_loss))
@@ -177,8 +176,6 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
             logger.log({"iteration": iteration})
             logger.log({"Image/utterance": wandb.Image(fig_mel, caption="Example Audio Mel Spec")})
             logger.log({"Image/alignments": wandb.Image(fig_align, caption="Example Attention Alignments")})
-            logger.log({"Audio/audio": wandb.Audio(audio, sample_rate=hparams.sample_rate, caption="Example Audio Generated")})
-
 
 def inference_utterance(
         model, 
@@ -211,9 +208,9 @@ def inference_utterance(
     fig_align.colorbar(im_align, ax=ax_align)
     
     # Convert mel spectrogram to audio
-    audio = inverse_mel_spec_to_wav(mel_outputs_postnet[0].cpu().numpy())
+    # audio = inverse_mel_spec_to_wav(mel_outputs_postnet[0].cpu().numpy())
     
-    return audio, fig_mel, fig_align
+    return fig_mel, fig_align
 
 
 def train(output_directory, checkpoint_path, warm_start, n_gpus,
@@ -355,6 +352,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     hparams = OmegaConf.load('config.yaml')
+    hparams.n_stft = int(hparams.n_fft // 2 + 1)
+    hparams.hop_length = int(hparams.n_fft / 8.0)
+    hparams.win_length = int(hparams.n_fft / 2.0)
 
     torch.backends.cudnn.enabled = hparams.cudnn_enabled
     torch.backends.cudnn.benchmark = hparams.cudnn_benchmark

@@ -6,7 +6,7 @@ import torch.utils.data
 import layers
 from utils import load_wav_to_torch, load_filepaths_and_text
 from text import SinhalaTokenizerTacotron
-from audio_processing import convert_to_mel_spec
+from audio_processing import TacotronSTFT
 
 
 class TextMelLoader(torch.utils.data.Dataset):
@@ -22,6 +22,10 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.max_wav_value = hparams.max_wav_value
         self.sample_rate = hparams.sample_rate
         self.load_mel_from_disk = hparams.load_mel_from_disk
+        self.stft = TacotronSTFT(
+            hparams.filter_length, hparams.hop_length, hparams.win_length,
+            hparams.n_mel_channels, hparams.sample_rate, hparams.mel_fmin,
+            hparams.mel_fmax)
         self.text_to_sequence = self._load_tokenizer(char_mapper)
         random.seed(hparams.seed)
         self.audiopaths_and_text = self.audiopaths_and_text.sample(frac=1, ignore_index=True)
@@ -39,17 +43,13 @@ class TextMelLoader(torch.utils.data.Dataset):
         return (text, mel)
 
     def get_mel(self, filename):
-        if not self.load_mel_from_disk:
-            audio, sample_rate = load_wav_to_torch(filename)
-            # if sample_rate != self.stft.sample_rate:
-            #     raise ValueError("{} {} SR doesn't match target {} SR".format(
-            #         sample_rate, self.stft.sample_rate))
-            # audio_norm = audio / self.max_wav_value
-            # audio_norm = audio_norm.unsqueeze(0)
-            melspec = convert_to_mel_spec(audio)
-            # melspec = torch.squeeze(melspec, 0)
-
-        return melspec
+        audio, sample_rate = load_wav_to_torch(filename)
+        if sample_rate != self.stft.sample_rate:
+            raise ValueError(f"File SR {sample_rate} doesn't match target SR {self.stft.sample_rate}")
+        audio_norm = audio / self.max_wav_value
+        audio_norm = audio_norm.unsqueeze(0)
+        melspec = self.stft.mel_spectrogram(audio_norm)
+        return torch.squeeze(melspec, 0)
 
     def get_text(self, text):
         seq = self.text_to_sequence(text, truncate_and_pad=False)

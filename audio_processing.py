@@ -1,130 +1,142 @@
 import torch
-import torchaudio
-from omegaconf import OmegaConf
+import torch.nn.functional as F
 import numpy as np
-import torchaudio.transforms as T
+import librosa
 
-config = OmegaConf.load("config.yaml")
-config.n_stft = int(config.n_fft // 2 + 1)
-config.hop_length = int(config.n_fft / 8.0)
-config.win_length = int(config.n_fft / 2.0)
+class STFT(torch.nn.Module):
+    def __init__(self, filter_length, hop_length, win_length, window='hann'):
+        super(STFT, self).__init__()
+        self.filter_length = filter_length
+        self.hop_length = hop_length
+        self.win_length = win_length
+        self.window = window
+        self.forward_transform = None
+        scale = self.filter_length / self.hop_length
+        fourier_basis = np.fft.fft(np.eye(self.filter_length))
 
-spec_transform = torchaudio.transforms.Spectrogram(
-    n_fft=config.n_fft, 
-    win_length=config.win_length,
-    hop_length=config.hop_length,
-    power=config.power
-)
+        cutoff = int((self.filter_length / 2 + 1))
+        fourier_basis = np.vstack([np.real(fourier_basis[:cutoff, :]),
+                                   np.imag(fourier_basis[:cutoff, :])])
 
-mel_scale_transform = torchaudio.transforms.MelScale(
-  n_mels=config.n_mel_channels, 
-  sample_rate=config.sample_rate, 
-  n_stft=config.n_stft
-)
+        forward_basis = torch.FloatTensor(fourier_basis[:, None, :])
+        inverse_basis = torch.FloatTensor(
+            np.linalg.pinv(scale * fourier_basis).T[:, None, :])
 
-mel_inverse_transform = torchaudio.transforms.InverseMelScale(
-    n_mels=config.n_mel_channels, 
-    sample_rate=config.sample_rate, 
-    n_stft=config.n_stft
-)
+        if window is not None:
+            assert(filter_length >= win_length)
+            fft_window = librosa.filters.get_window(window, win_length, fftbins=True)
+            fft_window = librosa.util.pad_center(fft_window, size=filter_length)
+            fft_window = torch.from_numpy(fft_window).float()
 
-def pre_emphasis(x, coef=0.97):
-    return torch.cat((x[:, 0].unsqueeze(1), x[:, 1:] - coef * x[:, :-1]), dim=1)
+            forward_basis *= fft_window
+            inverse_basis *= fft_window
 
-def de_emphasis(x, coef=0.97):
-    if x.dim() == 1:
-        x = x.unsqueeze(0)
-    x_ = x.clone()
-    for i in range(1, x_.size(-1)):
-        x_[..., i] += coef * x_[..., i-1]
-    return x_.squeeze(0)
+        self.register_buffer('forward_basis', forward_basis.float())
+        self.register_buffer('inverse_basis', inverse_basis.float())
 
-def norm_mel_spec_db(mel_spec):  
-    mel_spec = ((2.0*mel_spec - config.min_level_db) / (config.max_db/config.norm_db)) - 1.0
-    mel_spec = torch.clip(mel_spec, -config.ref*config.norm_db, config.ref*config.norm_db)
-    return mel_spec
+    def transform(self, input_data):
+        # Ensure input is 3D: (batch, channels, samples)
+        if input_data.dim() == 1:
+            input_data = input_data.unsqueeze(0).unsqueeze(0)
+        elif input_data.dim() == 2:
+            input_data = input_data.unsqueeze(1)
+        
+        num_batches, num_channels, num_samples = input_data.size()
+        
+        # Reflect padding
+        input_data = F.pad(
+            input_data,
+            (int(self.filter_length / 2), int(self.filter_length / 2), 0, 0),
+            mode='reflect')
+        
+        forward_transform = F.conv1d(
+            input_data,
+            self.forward_basis,
+            stride=self.hop_length,
+            padding=0)
 
-def denorm_mel_spec_db(mel_spec):
-    mel_spec = (((1.0 + mel_spec) * (config.max_db/config.norm_db)) + config.min_level_db) / 2.0 
-    return mel_spec
+        cutoff = int((self.filter_length / 2) + 1)
+        real_part = forward_transform[:, :cutoff, :]
+        imag_part = forward_transform[:, cutoff:, :]
 
-def ensure_tensor(x):
-    if isinstance(x, np.ndarray):
-        return torch.from_numpy(x)
-    return x
+        magnitude = torch.sqrt(real_part**2 + imag_part**2)
+        phase = torch.atan2(imag_part, real_part)
 
-def db_to_power_mel_spec(mel_spec):
-    mel_spec = ensure_tensor(mel_spec)
-    mel_spec = mel_spec * config.scale_db
-    mel_spec = torchaudio.functional.DB_to_amplitude(
-        mel_spec,
-        ref=config.ampl_ref,
-        power=config.ampl_power
-    )  
-    return mel_spec
+        return magnitude, phase
 
-def inverse_mel_spec_to_wav(mel_spec, n_iter=60):
-    mel_spec = ensure_tensor(mel_spec)
-    power_mel_spec = db_to_power_mel_spec(mel_spec).cpu()
-    spectrogram = mel_inverse_transform(power_mel_spec)
-    
-    griffnlim_transform = torchaudio.transforms.GriffinLim(
-        n_fft=config.n_fft,
-        win_length=config.win_length,
-        hop_length=config.hop_length,
-        n_iter=n_iter
-    )
-    
-    pseudo_wav = griffnlim_transform(spectrogram)
-    
-    return pseudo_wav
+    def inverse(self, magnitude, phase):
+        recombine_magnitude_phase = torch.cat(
+            [magnitude*torch.cos(phase), magnitude*torch.sin(phase)], dim=1)
 
-def pow_to_db_mel_spec(mel_spec):
-    mel_spec = ensure_tensor(mel_spec)
-    mel_spec = torchaudio.functional.amplitude_to_DB(
-        mel_spec,
-        multiplier = config.ampl_multiplier, 
-        amin = config.ampl_amin, 
-        db_multiplier = config.db_multiplier, 
-        top_db = config.max_db
-    )
-    mel_spec = mel_spec/config.scale_db
-    return mel_spec
+        inverse_transform = F.conv_transpose1d(
+            recombine_magnitude_phase,
+            self.inverse_basis,
+            stride=self.hop_length,
+            padding=0)
 
-def loudness_normalize(wav, target_lufs=-23.0, sample_rate=16000):
-    meter = T.Loudness(sample_rate)
-    
-    # Ensure wav is 2D: (channels, samples)
-    if wav.dim() == 1:
-        wav = wav.unsqueeze(0)
-    elif wav.dim() > 2:
-        raise ValueError(f"Expected 1D or 2D tensor, got {wav.dim()}D")
-    
-    # Ensure proper shape: (batch, channels, samples) for meter
-    if wav.dim() == 2:
-        wav = wav.unsqueeze(0)
-    
-    loudness = meter(wav)
-    gain = 10**((target_lufs - loudness) / 20)
-    
-    # Apply gain and remove batch dimension if it was added
-    normalized_wav = (wav.squeeze(0) * gain).clamp(-1, 1)
-    
-    return normalized_wav
+        if self.window is not None:
+            window_sum = librosa.filters.window_sumsquare(
+                                    window=self.window,
+                                    n_frames=magnitude.size(-1),
+                                    hop_length=self.hop_length,
+                                    win_length=self.win_length,
+                                    n_fft=self.filter_length,
+                                    dtype=np.float32
+                                )
+            approx_nonzero_indices = torch.from_numpy(
+                np.where(window_sum > np.finfo(np.float32).tiny)[0])
+            window_sum = torch.from_numpy(window_sum).to(magnitude.device)
+            inverse_transform[:, :, approx_nonzero_indices] /= window_sum[approx_nonzero_indices]
 
-def convert_to_mel_spec(wav):
-    wav = ensure_tensor(wav)
-    
-    # Apply loudness normalization
-    wav = loudness_normalize(wav, target_lufs=-23.0, sample_rate=config.sample_rate)
-    
-    # Apply pre-emphasis
-    wav = pre_emphasis(wav)
-    
-    spec = spec_transform(wav)
-    mel_spec = mel_scale_transform(spec)
-    db_mel_spec = pow_to_db_mel_spec(mel_spec)
-    db_mel_spec = db_mel_spec.squeeze(0)
-    if db_mel_spec.shape[-1] > 800:
-        db_mel_spec = db_mel_spec[:, :800]
-    return db_mel_spec
+            inverse_transform *= float(self.filter_length) / self.hop_length
+
+        inverse_transform = inverse_transform[:, :, int(self.filter_length/2):]
+        inverse_transform = inverse_transform[:, :, :-int(self.filter_length/2)]
+
+        return inverse_transform
+
+
+class TacotronSTFT(torch.nn.Module):
+    def __init__(self, filter_length=1024, hop_length=256, win_length=1024,
+                 n_mel_channels=80, sample_rate=16000, mel_fmin=0.0,
+                 mel_fmax=8000.0):
+        super(TacotronSTFT, self).__init__()
+        self.n_mel_channels = n_mel_channels
+        self.sample_rate = sample_rate
+        self.stft_fn = STFT(filter_length, hop_length, win_length)
+        mel_basis = librosa.filters.mel(
+            sr=sample_rate, n_fft=filter_length, n_mels=n_mel_channels, fmin=mel_fmin, fmax=mel_fmax)
+        mel_basis = torch.from_numpy(mel_basis).float()
+        self.register_buffer('mel_basis', mel_basis)
+
+    def spectral_normalize(self, magnitudes):
+        output = torch.log(torch.clamp(magnitudes, min=1e-5))
+        return output
+
+    def spectral_de_normalize(self, magnitudes):
+        return torch.exp(magnitudes)
+
+    def mel_spectrogram(self, y):
+        assert(torch.min(y.data) >= -1)
+        assert(torch.max(y.data) <= 1)
+
+        magnitudes, phases = self.stft_fn.transform(y)
+        mel_output = torch.matmul(self.mel_basis, magnitudes)
+        mel_output = self.spectral_normalize(mel_output)
+        return mel_output
+
+    def mel_spectrogram_to_wave(self, mel_spectrogram, n_iter=60):
+        mel_spectrogram = self.spectral_de_normalize(mel_spectrogram)
+        spectrogram = torch.matmul(self.mel_basis.transpose(0, 1), mel_spectrogram)
+        
+        # Initialize random phase
+        angles = torch.rand_like(spectrogram) * 2 * np.pi
+        
+        # Griffin-Lim
+        for _ in range(n_iter):
+            full = torch.polar(spectrogram, angles)
+            inverse = self.stft_fn.inverse(spectrogram, angles)
+            _, angles = self.stft_fn.transform(inverse)
+
+        waveform = self.stft_fn.inverse(spectrogram, angles)
+        return waveform.squeeze(1)
