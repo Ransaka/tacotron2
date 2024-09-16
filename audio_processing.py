@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import librosa
+import warnings
 
 class STFT(torch.nn.Module):
     def __init__(self, filter_length, hop_length, win_length, window='hann'):
@@ -117,8 +118,8 @@ class TacotronSTFT(torch.nn.Module):
         return torch.exp(magnitudes)
 
     def mel_spectrogram(self, y):
-        assert(torch.min(y.data) >= -1)
-        assert(torch.max(y.data) <= 1)
+        if torch.min(y.data) < -1 or torch.max(y.data) > 1:
+                warnings.warn("Input audio contains values outside [-1, 1] range")
 
         magnitudes, phases = self.stft_fn.transform(y)
         mel_output = torch.matmul(self.mel_basis, magnitudes)
