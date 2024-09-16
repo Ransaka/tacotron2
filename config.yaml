@@ -1,6 +1,6 @@
 # Experiment Parameters
-epochs: 500
-iters_per_checkpoint: 1000
+epochs: 1000
+iters_per_checkpoint: 100
 seed: 1234
 dynamic_loss_scaling: true
 fp16_run: false
@@ -26,10 +26,13 @@ n_stft: ??? # Will be set in code
 frame_shift: 0.0125
 hop_length: ??? # Will be set in code
 frame_length: 0.05
+filter_length: 1024
 win_length: ??? # Will be set in code
 mel_freq: 128
 max_mel_time: 800
 max_db: 100
+mel_fmax: 8000.0
+mel_fmin: 0.0
 scale_db: 10
 ref: 4.0
 power: 2.0
@@ -38,19 +41,24 @@ ampl_multiplier: 10.0
 ampl_amin: 1e-10
 db_multiplier: 1.0
 ampl_ref: 1.0
-sample_rate: 16000
+sample_rate: 22050
 ampl_power: 1.0
-n_mel_channels: 80
+n_mel_channels: 120
 max_wav_value: 1.0 #experiment on this
 
 # Model Parameters
-n_symbols: ??? # This needs to be set dynamically based on len(symbols)
+n_symbols: 768 # This needs to be set dynamically based on len(symbols)
 symbols_embedding_dim: 512
 
 # Encoder parameters
 encoder_kernel_size: 5
 encoder_n_convolutions: 3
 encoder_embedding_dim: 512
+decoder_attention_heads: 8
+encoder_n_layers: 6
+encoder_attention_heads: 8
+embedding_size: 512
+text_num_embeddings: 768
 
 # Decoder parameters
 n_frames_per_step: 1  # currently only 1 is supported
@@ -63,10 +71,10 @@ p_decoder_dropout: 0.1
 
 # Attention parameters
 attention_rnn_dim: 1024
-attention_dim: 128
+attention_dim: 256
 
 # Location Layer parameters
-attention_location_n_filters: 32
+attention_location_n_filters: 128
 attention_location_kernel_size: 31
 
 # Mel-post processing network parameters
