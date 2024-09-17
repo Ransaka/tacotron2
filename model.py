@@ -397,7 +397,7 @@ class Decoder(nn.Module):
         decoder_inputs = self.prenet(decoder_inputs)
 
         self.initialize_decoder_states(
-            memory, mask=get_mask_from_lengths(memory_lengths)) #TODO does this make scense to use ~ here?
+            memory, mask=~get_mask_from_lengths(memory_lengths)) #TODO does this make scense to use ~ here?
 
         mel_outputs, gate_outputs, alignments = [], [], []
         while len(mel_outputs) < decoder_inputs.size(0) - 1:
