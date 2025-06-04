@@ -135,9 +135,8 @@ class TacotronSTFT(torch.nn.Module):
         
         # Griffin-Lim
         for _ in range(n_iter):
-            full = torch.polar(spectrogram, angles)
-            inverse = self.stft_fn.inverse(spectrogram, angles)
-            _, angles = self.stft_fn.transform(inverse)
+            waveform = self.stft_fn.inverse(spectrogram, angles)
+            _, angles = self.stft_fn.transform(waveform)
 
         waveform = self.stft_fn.inverse(spectrogram, angles)
         return waveform.squeeze(1)
